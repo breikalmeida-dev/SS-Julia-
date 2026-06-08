@@ -1,594 +1,470 @@
 #!/bin/bash
 
 ################################################################################
-# SS JULIA CRIADOR - Git Monitor para Termux com WiFi Debug
-# Verifica modificações e etc conectando pela depuração wifi do celular
-# Com suporte para Free Fire Normal e Max
+# SS JULIA CRIADOR v2.0 - Versão Simplificada
+# Git Monitor + Free Fire Scanner para Termux
+# Reescrito em um único script - Simples, rápido e eficiente
 ################################################################################
 
-# Cores para output
+# Cores ANSI
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 CYAN='\033[0;36m'
 MAGENTA='\033[0;35m'
-NC='\033[0m' # No Color
+NC='\033[0m'
 
-# Configurações
-REPO_PATH="${1:-.}"
-MONITOR_INTERVAL="${2:-5}"
-LOG_FILE="$HOME/.ss_julia_criador/logs.txt"
-CONFIG_FILE="$HOME/.ss_julia_criador/config.conf"
-GAME_MODE="" # normal ou max
+# Configuração
+REPO="${1:-.}"
+INTERVAL="${2:-5}"
+GAME=""
+LOG_DIR="$HOME/.ss_julia"
+LOG_FILE="$LOG_DIR/logs.txt"
 
-# Criar diretório de logs se não existir
-mkdir -p "$HOME/.ss_julia_criador"
+mkdir -p "$LOG_DIR"
 
-################################################################################
-# Função: Exibir Banner
-################################################################################
-show_banner() {
+# ============================================================================
+# FUNÇÕES BÁSICAS
+# ============================================================================
+
+log() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >> "$LOG_FILE"
+}
+
+success() {
+    echo -e "${GREEN}[OK]${NC} $*"
+    log "SUCCESS: $*"
+}
+
+error() {
+    echo -e "${RED}[ERRO]${NC} $*" >&2
+    log "ERROR: $*"
+}
+
+info() {
+    echo -e "${BLUE}[*]${NC} $*"
+    log "INFO: $*"
+}
+
+warn() {
+    echo -e "${YELLOW}[!]${NC} $*"
+    log "WARN: $*"
+}
+
+banner() {
     clear
-    echo -e "${CYAN}"
+    echo -e "${CYAN}${MAGENTA}"
     cat << "EOF"
 ╔════════════════════════════════════════════════════════════════╗
 ║                                                                ║
-║           SS JULIA CRIADOR - Git Monitor Termux               ║
-║           WiFi Debug + Free Fire (Normal/Max)                 ║
-║                                                                ║
-║  Monitora modificações, commits e mudanças em repositórios    ║
-║  Com suporte para debug de Free Fire                          ║
+║         SS JULIA CRIADOR v2.0 - Git Monitor Termux           ║
+║            WiFi Debug + Free Fire (Normal/Max)                ║
 ║                                                                ║
 ╚════════════════════════════════════════════════════════════════╝
 EOF
     echo -e "${NC}"
 }
 
-################################################################################
-# Função: Log de eventos
-################################################################################
-log_event() {
-    local message="$1"
-    local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
-    echo "[${timestamp}] ${message}" >> "$LOG_FILE"
-    echo -e "${YELLOW}[LOG]${NC} ${message}"
+pause() {
+    read -rp "$(echo -e "${YELLOW}[Enter] continuar...${NC}")" _
 }
 
-################################################################################
-# Função: Verificar Git
-################################################################################
-check_git_installed() {
+# ============================================================================
+# VERIFICAÇÕES INICIAIS
+# ============================================================================
+
+check_git() {
     if ! command -v git &> /dev/null; then
-        echo -e "${RED}[ERRO]${NC} Git não está instalado!"
-        echo -e "${CYAN}Instale com: pkg install git${NC}"
+        error "Git não instalado!"
+        echo "Execute: pkg install git"
         exit 1
     fi
-    echo -e "${GREEN}[OK]${NC} Git encontrado"
+    success "Git encontrado"
 }
 
-################################################################################
-# Função: Verificar SSH
-################################################################################
-check_ssh_connection() {
-    echo -e "${BLUE}[*]${NC} Verificando conexão SSH..."
-    
-    if ! command -v ssh &> /dev/null; then
-        echo -e "${RED}[ERRO]${NC} SSH não está instalado!"
-        echo -e "${CYAN}Instale com: pkg install openssh${NC}"
-        return 1
-    fi
-    
-    echo -e "${GREEN}[OK]${NC} SSH disponível"
-    return 0
-}
-
-################################################################################
-# Função: Verificar Conexão WiFi
-################################################################################
-check_wifi_connection() {
-    echo -e "${BLUE}[*]${NC} Verificando conexão WiFi..."
-    
-    if ping -c 1 8.8.8.8 &> /dev/null; then
-        local ip=$(hostname -I 2>/dev/null || echo "N/A")
-        echo -e "${GREEN}[OK]${NC} Conectado à rede"
-        echo -e "${CYAN}IP local: ${ip}${NC}"
-        log_event "WiFi conectado - IP: $ip"
+check_ssh() {
+    info "Verificando SSH..."
+    if command -v ssh &> /dev/null; then
+        success "SSH disponível"
         return 0
-    else
-        echo -e "${RED}[ERRO]${NC} Sem conexão de rede"
-        log_event "Erro: Sem conexão de rede"
-        return 1
+    fi
+    warn "SSH não instalado (opcional)"
+    return 1
+}
+
+check_wifi() {
+    info "Verificando WiFi..."
+    if ping -c 1 -W 2 8.8.8.8 &> /dev/null; then
+        local ip=$(hostname -I 2>/dev/null || echo "N/A")
+        success "Conectado - IP: $ip"
+        log "WiFi: Conectado - IP: $ip"
+        return 0
+    fi
+    error "Sem conexão WiFi"
+    log "ERROR: Sem conexão WiFi"
+    return 1
+}
+
+initial_checks() {
+    echo ""
+    check_git
+    check_ssh
+    check_wifi
+    echo ""
+    sleep 1
+}
+
+# ============================================================================
+# VALIDAÇÃO
+# ============================================================================
+
+validate_repo() {
+    if [ ! -d "$REPO/.git" ]; then
+        error "Não é um repositório Git: $REPO"
+        echo "Uso: $0 [repo_path] [intervalo]"
+        echo "Ex:  $0 . 5"
+        exit 1
     fi
 }
 
-################################################################################
-# Função: Verificar Status do Repositório
-################################################################################
-check_repo_status() {
-    if [ ! -d "$REPO_PATH/.git" ]; then
-        echo -e "${RED}[ERRO]${NC} Não é um repositório Git válido: $REPO_PATH"
+# ============================================================================
+# OPERAÇÕES GIT
+# ============================================================================
+
+git_status() {
+    if [ ! -d "$REPO/.git" ]; then
+        error "Repositório não encontrado"
         return 1
     fi
     
-    cd "$REPO_PATH" || return 1
+    echo -e "\n${BLUE}════ STATUS DO REPOSITÓRIO ════${NC}\n"
     
-    echo -e "\n${BLUE}╔════ STATUS DO REPOSITÓRIO ════╗${NC}"
+    cd "$REPO" || return 1
     
-    # Branch atual
-    local current_branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)
-    echo -e "${CYAN}Branch:${NC} ${current_branch}"
-    log_event "Branch atual: $current_branch"
-    
-    # Remote
-    local remote=$(git config --get remote.origin.url 2>/dev/null)
-    echo -e "${CYAN}Remoto:${NC} ${remote}"
-    
-    # Mudanças não commitadas
+    local branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
+    local remote=$(git config --get remote.origin.url 2>/dev/null || echo "N/A")
     local changes=$(git status --porcelain 2>/dev/null | wc -l)
+    local unpushed=$(git rev-list --count @{u}.. 2>/dev/null || echo "0")
+    local last=$(git log -1 --pretty=format:"%h - %s" 2>/dev/null || echo "N/A")
+    
+    echo -e "${CYAN}Branch:${NC} $branch"
+    echo -e "${CYAN}Remoto:${NC} $remote"
+    
     if [ "$changes" -gt 0 ]; then
-        echo -e "${RED}Mudanças:${NC} ${changes} arquivo(s) modificado(s)"
-        log_event "Detectadas $changes mudanças não commitadas"
-        git status --short
+        echo -e "${RED}Mudanças:${NC} $changes arquivo(s)"
+        echo ""
+        git status --short 2>/dev/null
     else
-        echo -e "${GREEN}Mudanças:${NC} Nenhuma (limpo)"
+        echo -e "${GREEN}Mudanças:${NC} Nenhuma"
     fi
     
-    # Commits não pusheados
-    local unpushed=$(git log --oneline origin/HEAD..HEAD 2>/dev/null | wc -l)
     if [ "$unpushed" -gt 0 ]; then
-        echo -e "${YELLOW}Não pusheados:${NC} ${unpushed} commit(s)"
-        log_event "$unpushed commits aguardando push"
+        echo -e "${YELLOW}Não pusheados:${NC} $unpushed commit(s)"
     fi
     
-    # Hash do último commit
-    local last_commit=$(git log -1 --pretty=format:"%h - %s" 2>/dev/null)
-    echo -e "${CYAN}Último commit:${NC} ${last_commit}"
+    echo -e "${CYAN}Último commit:${NC} $last"
+    echo ""
     
-    echo -e "${BLUE}╚════════════════════════════╝${NC}\n"
+    log "Git Status: Branch=$branch, Mudanças=$changes"
+    pause
 }
 
-################################################################################
-# Função: Monitorar Mudanças em Tempo Real
-################################################################################
 monitor_changes() {
-    echo -e "${BLUE}[*]${NC} Iniciando monitoramento (intervalo: ${MONITOR_INTERVAL}s)"
-    echo -e "${YELLOW}Pressione Ctrl+C para parar${NC}\n"
+    info "Monitorando (Ctrl+C para parar)"
+    echo ""
     
-    log_event "Monitoramento iniciado"
-    
-    local last_status=""
-    local last_changes=""
+    local last_hash=""
+    log "Monitoramento iniciado"
     
     while true; do
-        if [ ! -d "$REPO_PATH/.git" ]; then
-            echo -e "${RED}[ERRO]${NC} Repositório não encontrado!"
-            break
-        fi
+        cd "$REPO" || break
         
-        cd "$REPO_PATH" || break
+        local curr_hash=$(git status --porcelain 2>/dev/null | md5sum | cut -d' ' -f1)
+        local count=$(git status --porcelain 2>/dev/null | wc -l)
         
-        # Verificar mudanças
-        local current_status=$(git status --porcelain 2>/dev/null | md5sum)
-        local current_changes=$(git status --porcelain 2>/dev/null | wc -l)
-        
-        if [ "$current_status" != "$last_status" ]; then
-            local timestamp=$(date '+%H:%M:%S')
+        if [ "$curr_hash" != "$last_hash" ]; then
+            local ts=$(date '+%H:%M:%S')
             
-            if [ "$current_changes" -gt 0 ]; then
-                echo -e "${RED}[${timestamp}] ⚠ Mudanças detectadas! (${current_changes} arquivo(s))${NC}"
-                git status --short
-                log_event "Mudanças detectadas: $current_changes arquivo(s)"
+            if [ "$count" -gt 0 ]; then
+                echo -e "${RED}[$ts]${NC} ⚠ $count mudança(s)"
+                git status --short 2>/dev/null
+                log "Mudanças detectadas: $count"
             else
-                echo -e "${GREEN}[${timestamp}] ✓ Repositório limpo${NC}"
-                log_event "Repositório sincronizado"
+                echo -e "${GREEN}[$ts]${NC} ✓ Limpo"
+                log "Repositório sincronizado"
             fi
             
-            last_status="$current_status"
-            last_changes="$current_changes"
+            last_hash="$curr_hash"
         fi
         
-        sleep "$MONITOR_INTERVAL"
+        sleep "$INTERVAL"
     done
+    
+    echo ""
+    log "Monitoramento encerrado"
 }
 
-################################################################################
-# Função: Menu de Seleção Free Fire
-################################################################################
-select_game_mode() {
+# ============================================================================
+# FREE FIRE
+# ============================================================================
+
+select_game() {
     clear
     echo -e "${MAGENTA}"
     cat << "EOF"
 ╔════════════════════════════════════════════════════════════════╗
-║                                                                ║
-║              SELEÇÃO DE MODO FREE FIRE                        ║
-║                                                                ║
+║                   SELEÇÃO FREE FIRE                           ║
 ╚════════════════════════════════════════════════════════════════╝
 EOF
     echo -e "${NC}"
     
     echo -e "${CYAN}1${NC}) Free Fire Normal"
-    echo -e "   - Versão padrão do jogo"
-    echo -e "   - Requisitos: 700MB RAM"
-    echo -e "   - Graficos: Médios"
+    echo "   • Versão padrão"
+    echo "   • ~700 MB RAM"
+    echo "   • com.mobile.legends"
     echo ""
     
     echo -e "${CYAN}2${NC}) Free Fire Max"
-    echo -e "   - Versão ultra HD"
-    echo -e "   - Requisitos: 2GB RAM"
-    echo -e "   - Graficos: Ultra"
+    echo "   • Versão Ultra HD"
+    echo "   • ~2 GB RAM"
+    echo "   • com.mobile.legends.ffmax"
     echo ""
     
     echo -e "${CYAN}0${NC}) Cancelar"
     echo ""
-    echo -n -e "${YELLOW}Escolha uma opção:${NC} "
-    read -r game_choice
     
-    case $game_choice in
+    read -rp "$(echo -e "${YELLOW}Escolha:${NC} ")" choice
+    
+    case $choice in
         1)
-            GAME_MODE="normal"
-            echo -e "${GREEN}[OK]${NC} Modo selecionado: Free Fire Normal"
-            log_event "Modo selecionado: Free Fire Normal"
-            show_ff_normal_info
+            GAME="normal"
+            success "Free Fire Normal selecionado"
+            show_ff_info "normal"
+            log "Modo selecionado: Free Fire Normal"
             ;;
         2)
-            GAME_MODE="max"
-            echo -e "${GREEN}[OK]${NC} Modo selecionado: Free Fire Max"
-            log_event "Modo selecionado: Free Fire Max"
-            show_ff_max_info
+            GAME="max"
+            success "Free Fire Max selecionado"
+            show_ff_info "max"
+            log "Modo selecionado: Free Fire Max"
             ;;
         0)
-            return 1
+            return
             ;;
         *)
-            echo -e "${RED}[ERRO]${NC} Opção inválida!"
-            select_game_mode
+            error "Opção inválida"
+            sleep 1
+            select_game
             ;;
     esac
 }
 
-################################################################################
-# Função: Informações Free Fire Normal
-################################################################################
-show_ff_normal_info() {
-    echo -e "\n${BLUE}╔════ FREE FIRE NORMAL ════╗${NC}"
-    echo -e "${CYAN}Informações do Jogo:${NC}"
-    echo -e "  Pacote: com.mobile.legends"
-    echo -e "  Nome: Free Fire"
-    echo -e "  Tamanho: ~650 MB"
-    echo -e "  RAM mínima: 700 MB"
-    echo -e "  Android mínimo: 4.4"
+show_ff_info() {
+    local mode=$1
     
-    echo -e "\n${YELLOW}Caminhos Principais:${NC}"
-    echo -e "  Data: /data/data/com.mobile.legends"
-    echo -e "  OBB: /sdcard/Android/obb/com.mobile.legends"
-    
-    echo -e "\n${CYAN}Verificando instalação...${NC}"
-    check_game_installed "com.mobile.legends" "Free Fire Normal"
+    if [ "$mode" = "normal" ]; then
+        echo -e "\n${BLUE}╔════ FREE FIRE NORMAL ════╗${NC}"
+        echo -e "${CYAN}Pacote:${NC} com.mobile.legends"
+        echo -e "${CYAN}Tamanho:${NC} ~650 MB"
+        echo -e "${CYAN}RAM Min:${NC} 700 MB"
+        echo -e "${CYAN}Android:${NC} 4.4+"
+        echo -e "\n${YELLOW}Caminhos:${NC}"
+        echo "  /data/data/com.mobile.legends"
+        echo "  /sdcard/Android/obb/com.mobile.legends"
+    else
+        echo -e "\n${BLUE}╔════ FREE FIRE MAX ════╗${NC}"
+        echo -e "${CYAN}Pacote:${NC} com.mobile.legends.ffmax"
+        echo -e "${CYAN}Tamanho:${NC} ~1.8 GB"
+        echo -e "${CYAN}RAM Min:${NC} 2 GB"
+        echo -e "${CYAN}Android:${NC} 5.0+"
+        echo -e "\n${YELLOW}Caminhos:${NC}"
+        echo "  /data/data/com.mobile.legends.ffmax"
+        echo "  /sdcard/Android/obb/com.mobile.legends.ffmax"
+    fi
     
     echo -e "${BLUE}╚═════════════════════════╝${NC}\n"
+    pause
 }
 
-################################################################################
-# Função: Informações Free Fire Max
-################################################################################
-show_ff_max_info() {
-    echo -e "\n${BLUE}╔════ FREE FIRE MAX ════╗${NC}"
-    echo -e "${CYAN}Informações do Jogo:${NC}"
-    echo -e "  Pacote: com.mobile.legends.ffmax"
-    echo -e "  Nome: Free Fire Max"
-    echo -e "  Tamanho: ~1.8 GB"
-    echo -e "  RAM mínima: 2 GB"
-    echo -e "  Android mínimo: 5.0"
-    
-    echo -e "\n${YELLOW}Caminhos Principais:${NC}"
-    echo -e "  Data: /data/data/com.mobile.legends.ffmax"
-    echo -e "  OBB: /sdcard/Android/obb/com.mobile.legends.ffmax"
-    
-    echo -e "\n${CYAN}Verificando instalação...${NC}"
-    check_game_installed "com.mobile.legends.ffmax" "Free Fire Max"
-    
-    echo -e "${BLUE}╚══════════════════════╝${NC}\n"
-}
-
-################################################################################
-# Função: Verificar se Jogo está Instalado
-################################################################################
-check_game_installed() {
-    local package="$1"
-    local game_name="$2"
-    
-    if command -v pm &> /dev/null; then
-        if pm list packages | grep -q "$package"; then
-            echo -e "${GREEN}[OK]${NC} $game_name está instalado"
-            log_event "$game_name encontrado instalado"
-            
-            # Obter versão
-            local version=$(pm dump "$package" 2>/dev/null | grep versionName | head -1 | cut -d'=' -f2)
-            if [ -n "$version" ]; then
-                echo -e "${CYAN}Versão:${NC} $version"
-            fi
-        else
-            echo -e "${RED}[AVISO]${NC} $game_name não está instalado"
-            log_event "$game_name não encontrado"
-        fi
-    fi
-}
-
-################################################################################
-# Função: Debug WiFi Free Fire
-################################################################################
 debug_ff_wifi() {
-    if [ -z "$GAME_MODE" ]; then
-        echo -e "${RED}[ERRO]${NC} Primeiro selecione um modo Free Fire"
+    if [ -z "$GAME" ]; then
+        error "Selecione um modo Free Fire primeiro"
         return 1
     fi
     
-    echo -e "\n${BLUE}╔════ DEBUG WiFi FREE FIRE (${GAME_MODE^^}) ════╗${NC}"
+    echo -e "\n${BLUE}════ DEBUG WiFi FREE FIRE (${GAME^^}) ════${NC}\n"
     
-    # Definir package baseado no modo
-    local package
-    if [ "$GAME_MODE" = "normal" ]; then
-        package="com.mobile.legends"
+    echo -e "${CYAN}Status de Conectividade:${NC}"
+    if ping -c 4 -W 2 8.8.8.8 2>&1; then
+        success "Conectado ao servidor"
     else
-        package="com.mobile.legends.ffmax"
+        warn "Offline ou lento"
     fi
-    
-    echo -e "${CYAN}Processo do Jogo:${NC}"
-    if command -v ps &> /dev/null; then
-        ps -A | grep "$package" || echo "Jogo não está rodando"
-    fi
-    
-    echo -e "\n${CYAN}Conexão de Rede:${NC}"
-    if command -v netstat &> /dev/null; then
-        netstat -an | grep ESTABLISHED | wc -l
-        echo "conexões estabelecidas"
-    fi
-    
-    echo -e "\n${CYAN}Verificar conectividade:${NC}"
-    ping -c 4 -W 2 8.8.8.8 || echo "Sem conectividade"
     
     echo -e "\n${CYAN}IP Local:${NC}"
-    hostname -I
+    hostname -I 2>/dev/null || echo "N/A"
     
-    echo -e "\n${CYAN}Latência estimada (ping):${NC}"
-    ping -c 1 -W 2 8.8.8.8 | grep time= || echo "N/A"
+    echo -e "\n${CYAN}Conexões Ativas:${NC}"
+    local conn=$(netstat -an 2>/dev/null | grep -c ESTABLISHED || echo "0")
+    echo "$conn conexão(ões) estabelecida(s)"
     
-    echo -e "${BLUE}╚════════════════════════════════════════╝${NC}\n"
+    echo -e "\n${CYAN}Latência (ms):${NC}"
+    ping -c 1 -W 2 8.8.8.8 2>&1 | grep "time=" || echo "N/A"
     
-    log_event "Debug WiFi executado para Free Fire ($GAME_MODE)"
+    echo ""
+    log "Debug WiFi Free Fire ($GAME) executado"
+    pause
 }
 
-################################################################################
-# Função: Monitor de Performance Free Fire
-################################################################################
 monitor_ff_performance() {
-    if [ -z "$GAME_MODE" ]; then
-        echo -e "${RED}[ERRO]${NC} Primeiro selecione um modo Free Fire"
+    if [ -z "$GAME" ]; then
+        error "Selecione um modo Free Fire primeiro"
         return 1
     fi
     
-    local package
-    if [ "$GAME_MODE" = "normal" ]; then
-        package="com.mobile.legends"
+    local pkg
+    if [ "$GAME" = "normal" ]; then
+        pkg="com.mobile.legends"
     else
-        package="com.mobile.legends.ffmax"
+        pkg="com.mobile.legends.ffmax"
     fi
     
-    echo -e "\n${BLUE}[*]${NC} Monitorando Free Fire ($GAME_MODE)..."
-    echo -e "${YELLOW}Pressione Ctrl+C para parar${NC}\n"
+    info "Monitorando Free Fire ($GAME) - Ctrl+C para parar"
+    echo ""
     
-    log_event "Monitoramento de performance Free Fire ($GAME_MODE) iniciado"
+    log "Monitor FF Performance ($GAME) iniciado"
     
-    while true; do
-        local timestamp=$(date '+%H:%M:%S')
+    for i in {1..10}; do
+        local ts=$(date '+%H:%M:%S')
         
-        # Verificar se o jogo está rodando
-        if command -v pgrep &> /dev/null && pgrep -f "$package" > /dev/null; then
-            echo -e "${GREEN}[${timestamp}]${NC} Jogo rodando"
-            
-            # Tentar obter uso de memória se disponível
-            if command -v dumpsys &> /dev/null; then
-                local mem=$(dumpsys meminfo | grep "$package" | awk '{print $2}' | head -1)
-                if [ -n "$mem" ]; then
-                    echo -e "  Memória: ${mem}K"
-                fi
-            fi
-            
-            # Verificar conexão
-            local connections=$(netstat -an 2>/dev/null | grep ESTABLISHED | wc -l)
-            echo -e "  Conexões: $connections"
-            
+        if pgrep -f "$pkg" > /dev/null 2>&1; then
+            echo -e "${GREEN}[$ts]${NC} Jogo rodando"
         else
-            echo -e "${YELLOW}[${timestamp}]${NC} Jogo não está rodando"
+            echo -e "${YELLOW}[$ts]${NC} Jogo não ativo"
         fi
         
         sleep 3
     done
+    
+    echo ""
+    log "Monitor FF Performance finalizado"
 }
 
-################################################################################
-# Função: Modo Debug Geral
-################################################################################
-debug_mode() {
-    echo -e "\n${BLUE}╔════ MODO DEBUG GERAL ════╗${NC}"
-    echo -e "${CYAN}Informações do Sistema:${NC}"
+# ============================================================================
+# SISTEMA
+# ============================================================================
+
+debug_system() {
+    echo -e "\n${BLUE}════ DEBUG DO SISTEMA ════${NC}\n"
     
-    echo -e "\n${YELLOW}Hostname:${NC}"
+    echo -e "${YELLOW}Hostname:${NC}"
     hostname
     
-    echo -e "\n${YELLOW}Endereços IP:${NC}"
-    hostname -I
+    echo -e "${YELLOW}IP Local:${NC}"
+    hostname -I 2>/dev/null || echo "N/A"
     
-    echo -e "\n${YELLOW}Versão Android:${NC}"
+    echo -e "${YELLOW}Versão Android:${NC}"
     getprop ro.build.version.release 2>/dev/null || echo "N/A"
     
-    echo -e "\n${YELLOW}Kernel:${NC}"
+    echo -e "${YELLOW}Kernel:${NC}"
     uname -a
     
-    echo -e "\n${YELLOW}Memória Total:${NC}"
+    echo -e "${YELLOW}Memória:${NC}"
     free -h 2>/dev/null || echo "N/A"
     
-    echo -e "\n${YELLOW}SSH Status:${NC}"
-    if command -v sshd &> /dev/null; then
-        echo "SSH disponível"
-    else
-        echo "SSH não instalado"
-    fi
+    echo -e "${YELLOW}SSH:${NC}"
+    command -v sshd &> /dev/null && echo "Instalado" || echo "Não instalado"
     
-    echo -e "\n${YELLOW}Git Status:${NC}"
+    echo -e "${YELLOW}Git:${NC}"
     git --version
     
-    if [ -n "$GAME_MODE" ]; then
-        echo -e "\n${YELLOW}Modo Free Fire:${NC}"
-        echo "Selecionado: $GAME_MODE"
+    if [ -n "$GAME" ]; then
+        echo -e "${YELLOW}Modo FF Ativo:${NC} $GAME"
     fi
     
-    echo -e "\n${BLUE}╚════════════════════════╝${NC}\n"
+    echo ""
+    log "Debug Sistema executado"
+    pause
 }
 
-################################################################################
-# Função: Exibir Logs
-################################################################################
 show_logs() {
-    echo -e "\n${BLUE}╔════ ÚLTIMOS LOGS ════╗${NC}"
+    echo -e "\n${BLUE}════ ÚLTIMOS LOGS ════${NC}\n"
+    
     if [ -f "$LOG_FILE" ]; then
-        tail -30 "$LOG_FILE"
+        tail -20 "$LOG_FILE"
     else
-        echo -e "${YELLOW}Nenhum log encontrado${NC}"
+        echo "Nenhum log disponível"
     fi
-    echo -e "${BLUE}╚════════════════════╝${NC}\n"
+    
+    echo ""
+    pause
 }
 
-################################################################################
-# Função: Menu Interativo
-################################################################################
+# ============================================================================
+# MENU
+# ============================================================================
+
 show_menu() {
-    echo -e "\n${BLUE}╔════ MENU PRINCIPAL ════╗${NC}"
-    echo -e "${CYAN}GIT MONITOR:${NC}"
-    echo -e "  ${CYAN}1${NC}) Verificar Status"
+    echo -e "\n${BLUE}════ MENU PRINCIPAL ════${NC}\n"
+    
+    echo -e "${MAGENTA}GIT MONITOR:${NC}"
+    echo -e "  ${CYAN}1${NC}) Status do Repositório"
     echo -e "  ${CYAN}2${NC}) Monitorar Mudanças"
     echo ""
+    
     echo -e "${MAGENTA}FREE FIRE:${NC}"
     echo -e "  ${CYAN}3${NC}) Selecionar Modo (Normal/Max)"
-    echo -e "  ${CYAN}4${NC}) Debug WiFi Free Fire"
+    echo -e "  ${CYAN}4${NC}) Debug WiFi"
     echo -e "  ${CYAN}5${NC}) Monitor Performance"
     echo ""
-    echo -e "${CYAN}SISTEMA:${NC}"
-    echo -e "  ${CYAN}6${NC}) Modo Debug Geral"
+    
+    echo -e "${MAGENTA}SISTEMA:${NC}"
+    echo -e "  ${CYAN}6${NC}) Debug do Sistema"
     echo -e "  ${CYAN}7${NC}) Ver Logs"
-    echo -e "  ${CYAN}8${NC}) Configurações"
     echo -e "  ${CYAN}0${NC}) Sair"
-    echo -e "${BLUE}╚═══════════════════════╝${NC}"
-    echo -n -e "${YELLOW}Escolha uma opção:${NC} "
+    echo ""
+    
+    read -rp "$(echo -e "${YELLOW}Escolha:${NC} ")" choice
 }
 
-################################################################################
-# Função: Configurações
-################################################################################
-show_config() {
-    echo -e "\n${BLUE}╔════ CONFIGURAÇÕES ════╗${NC}"
-    
-    echo -e "${CYAN}Caminho do repositório:${NC}"
-    echo "  $REPO_PATH"
-    
-    echo -e "\n${CYAN}Intervalo de monitoramento:${NC}"
-    echo "  ${MONITOR_INTERVAL}s"
-    
-    echo -e "\n${CYAN}Modo Free Fire:${NC}"
-    if [ -z "$GAME_MODE" ]; then
-        echo "  Nenhum selecionado"
-    else
-        echo "  $GAME_MODE"
-    fi
-    
-    echo -e "\n${CYAN}Arquivo de log:${NC}"
-    echo "  $LOG_FILE"
-    
-    echo -e "\n${CYAN}Editar intervalo? (s/n):${NC} "
-    read -r edit_interval
-    if [[ "$edit_interval" == "s" ]] || [[ "$edit_interval" == "S" ]]; then
-        echo -n "Novo intervalo (segundos): "
-        read -r new_interval
-        MONITOR_INTERVAL="$new_interval"
-        echo -e "${GREEN}[OK]${NC} Intervalo atualizado para ${MONITOR_INTERVAL}s"
-        log_event "Intervalo de monitoramento alterado para $MONITOR_INTERVAL segundos"
-    fi
-    
-    echo -e "${BLUE}╚════════════════════════╝${NC}\n"
-}
-
-################################################################################
-# Função: Verificação Inicial
-################################################################################
-initial_checks() {
-    echo -e "${BLUE}[*]${NC} Realizando verificações iniciais..."
-    
-    check_git_installed
-    check_ssh_connection
-    check_wifi_connection
-    
-    echo -e "${GREEN}[OK]${NC} Todas as verificações concluídas\n"
-    log_event "Verificações iniciais completadas"
-}
-
-################################################################################
-# Main - Programa Principal
-################################################################################
-main() {
-    show_banner
-    
-    # Validar repositório
-    if [ ! -d "$REPO_PATH/.git" ]; then
-        echo -e "${RED}[ERRO]${NC} Caminho inválido ou não é um repositório Git"
-        echo "Uso: $0 [caminho_repo] [intervalo_segundos]"
-        echo "Exemplo: $0 . 5"
-        exit 1
-    fi
-    
-    initial_checks
-    
-    # Menu principal
+main_loop() {
     while true; do
         show_menu
-        read -r choice
         
         case $choice in
-            1)
-                check_repo_status
-                ;;
+            1) git_status ;;
             2)
+                trap 'echo ""; info "Monitoramento parado"; echo ""' INT
                 monitor_changes
+                trap - INT
                 ;;
-            3)
-                select_game_mode
-                ;;
-            4)
-                debug_ff_wifi
-                ;;
-            5)
-                monitor_ff_performance
-                ;;
-            6)
-                debug_mode
-                ;;
-            7)
-                show_logs
-                ;;
-            8)
-                show_config
-                ;;
+            3) select_game ;;
+            4) debug_ff_wifi ;;
+            5) monitor_ff_performance ;;
+            6) debug_system ;;
+            7) show_logs ;;
             0)
-                echo -e "${GREEN}Até logo!${NC}"
-                log_event "Programa finalizado"
+                success "Até logo!"
+                log "Programa finalizado"
                 exit 0
                 ;;
             *)
-                echo -e "${RED}Opção inválida!${NC}"
+                error "Opção inválida"
+                sleep 1
                 ;;
         esac
     done
 }
 
-# Executar
-main "$@"
+# ============================================================================
+# MAIN
+# ============================================================================
+
+banner
+sleep 2
+
+validate_repo
+initial_checks
+
+main_loop
